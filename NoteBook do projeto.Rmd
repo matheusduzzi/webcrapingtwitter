@@ -1,0 +1,303 @@
+---
+title: "Bolsa de valores x Twitter"
+output: html_notebook
+---
+
+```{r}
+library(SentimentAnalysis) # analise de sentimento nos textos
+library(tidyverse) # manipulação de dados
+#library(data.table)
+library(tidytext) # manipulação de texto
+#library(glue)
+#library(stringr) # manipulação de texto
+#library(stringi) # manipulação de texto
+library(readr) # leitura de arquivo
+#library(ptstem)
+library(wordcloud2) # plotagem de nuvem de palavras
+library(rtweet) # pacote de autenticação e manipulação dos dados do tt
+#library(dplyr) # manipulação de dados
+#library(tidyr) # manipulação de dados
+library(readxl) # leitura de arquivo
+#library(tm) # manipulação de texto
+#library(BatchGetSymbols) # leitura de tickets da bolsa
+```
+
+# PARTE 1
+# Fazer uma nuvem de palavras
+
+# Primeiro banco de stop words
+
+```{r}
+sw <- c("a","ainda","alem","ambas","ambos","antes","ao","aonde","aos","apos","aquele","aqueles","as","assim","com","como","contra","contudo","cuja","cujas","cujo","cujos","da","das","de","dela","dele","deles","demais","depois","desde","desta","deste","dispoe","dispoem","diversa","diversas","diversos","do","dos","durante","e","ela","elas","ele","eles","em","entao","entre","essa")
+swList2 <- stopwords('portuguese')
+sw_merged <- union(sw,swList2) 
+```
+
+# Extraindo os dados do twitter
+```{r}
+# timeline do usuario
+tmls <- get_timelines(c("leiamoneytimes","TraderBolsa"), n = 100)
+
+# extraindo somente o texto
+tweetxt <- tmls %>% select(text)
+tibble(tweetxt)
+```
+
+
+# Limpeza do banco de dados gerado
+```{r}
+removeURL <- function(x) gsub("http[^[:space:]]*", "", x)
+tweetxtUtf <- sapply(tweetxt, function(x) stri_trans_tolower(x,'pt'))
+tweetxtUtf <- gsub("(RT|via)((?:\\b\\W*@\\w+)+)", " ",  tweetxtUtf);
+tweetxtUtf <- str_replace(tweetxtUtf,"RT @[a-z,A-Z]*: ","")
+tweetxtUtf <- gsub("@\\w+", "", tweetxtUtf)
+tweetxtUtf <- removeURL(tweetxtUtf)
+tweetxtUtf <- str_replace_all(tweetxtUtf,"@[a-z,A-Z]*","")  
+tweetxtUtf <- gsub("[^[:alnum:][:blank:]!?]", " ", tweetxtUtf)
+tweetxtUtf <- gsub("[[:digit:]]", "", tweetxtUtf)
+```
+
+# Removendo duplicadas
+```{r}
+tweetxtUtfUniqueSw <- tm::removeWords(tweetxtUtf,c(sw_merged,'rt'))
+```
+
+# Seleção das palavras relevantes e contagem
+
+```{r}
+ttokens <- data_frame(word= tweetxtUtfUniqueSw) %>% unnest_tokens(word,word)
+ttokens_filter <- ttokens %>% filter(nchar(word) > 3)
+```
+
+# Formatação de frequência
+
+```{r}
+ttokens_freq <- ttokens_filter %>% count(word, sort = T) %>% select(word, freq=n) 
+```
+
+# Plot da figura
+
+```{r}
+wordcloud2(ttokens_freq , minSize = 2, size = 1, backgroundColor = 'black')
+```
+
+# Bônus
+# Plot de gráfico de barras
+```{r}
+ttokens_filter %>% 
+  count(word, sort = TRUE) %>%
+  top_n(10) %>% 
+  mutate(word = reorder(word,n)) %>% 
+  ggplot(aes(word,n)) +
+  geom_col() +
+ xlab(NULL) +
+  coord_flip() +
+ theme_classic()+
+  labs(x = "Palavras",
+       y = "Contagem",
+       title = "Palavras destaque dos Blogs de Mercado Financeiro")
+```
+
+# PARTE 2
+# Análise de sentimentos
+
+# Primeiro banco de indicadores de polaridade (arquivos achados na internet)
+
+```{r}
+an <- read.table("adjetivos_negativos.txt", header = F, sep = "\t", strip.white = F,
+               stringsAsFactors = F)
+exn <- read.table("expressoes_negativas.txt", header = F, sep = "\t", strip.white = F,
+                stringsAsFactors = F)
+vn <- read.table("verbos_negativos.txt", header = F, sep = "\t", strip.white = F, 
+               stringsAsFactors = F)
+subn <- read.table("substantivos_negativos.txt", header = F, sep = "\t", strip.white = F, 
+                 stringsAsFactors = F)
+ap <- read.table("adjetivos_positivos.txt", header = F, sep = "\t", strip.white = F, 
+               stringsAsFactors = F)
+exp <- read.table("expressoes_positivas.txt", header = F, sep = "\t", strip.white = F, 
+                stringsAsFactors = F)
+vp <- read.table("verbos_positivos.txt", header = F, sep = "\t", strip.white = F, 
+               stringsAsFactors = F)
+sp <- read.table("substantivos_positivos.txt", header = F, sep = "\t", strip.white = F, 
+               stringsAsFactors = F)
+```
+
+# Segundo banco de indicadores de polaridade (do kaggle)
+
+```{r}
+poskaggle <- read.table("positive_words_pt.txt", header = F, sep = "\t", strip.white = F, 
+                      stringsAsFactors = F, encoding="UTF-8")
+negkaggle <- read.table("negative_words_pt.txt", header = F, sep = "\t", strip.white = F, 
+                      stringsAsFactors = F, encoding="UTF-8")
+```
+
+# Juntando tudo que temos de polaridade
+
+```{r}
+dfPolaridades <- an %>% 
+  mutate(word = V1, polaridade = -1, tipo='adjetivo', sentimento='negativo') %>%
+  select(word,polaridade,tipo,sentimento) %>%
+  arrange(word)
+icount <-  length(exn$V1)
+
+dfPolaridades <- bind_rows(dfPolaridades,list(word = exn$V1, polaridade=rep(-1,icount),tipo=rep('expressao',icount),sentimento=rep('negativo',icount)))
+icount <-  length(vn$V1)
+
+dfPolaridades <- bind_rows(dfPolaridades,list(word = vn$V1, polaridade=rep(-1,icount),tipo=rep('verbo',icount),sentimento=rep('negativo',icount)))
+icount <-  length(subn$V1)
+
+dfPolaridades <- bind_rows(dfPolaridades,list(word = subn$V1, polaridade=rep(-1,icount),tipo=rep('substantivo',icount),sentimento=rep('negativo',icount)))
+icount <-  length(negkaggle$V1)
+
+dfPolaridades <- bind_rows(dfPolaridades,list(word = negkaggle$V1, polaridade=rep(-1,icount),tipo=rep('noclass',icount),sentimento=rep('negativo',icount)))
+icount <-  length(ap$V1)
+
+dfPolaridades <- bind_rows(dfPolaridades,list(word = ap$V1, polaridade=rep(1,icount),tipo=rep('adjetivo',icount),sentimento=rep('positivo',icount)))
+icount <-  length(exp$V1)
+
+dfPolaridades <- bind_rows(dfPolaridades,list(word = exp$V1, polaridade=rep(1,icount),tipo=rep('expressao',icount),sentimento=rep('positivo',icount)))
+icount <-  length(vp$V1)
+
+dfPolaridades <- bind_rows(dfPolaridades,list(word = vp$V1, polaridade=rep(1,icount),tipo=rep('verbo',icount),sentimento=rep('positivo',icount)))
+icount <-  length(sp$V1)
+
+dfPolaridades <- bind_rows(dfPolaridades,list(word = sp$V1, polaridade=rep(1,icount),tipo=rep('substantivo',icount),sentimento=rep('positivo',icount)))
+icount <-  length(poskaggle$V1)
+
+dfPolaridades <- bind_rows(dfPolaridades,list(word = poskaggle$V1, polaridade=rep(1,icount),tipo=rep('noclass',icount),sentimento=rep('positivo',icount)))
+
+dfPolaridades$word <- gsub("[[]","",dfPolaridades$word)
+dfPolaridades$word <- gsub("[]]","",dfPolaridades$word)
+dfPolaridadesUnique <- dfPolaridades[!duplicated(dfPolaridades$word),]
+```
+
+# Começando a análise de fato
+# Filtrando por indicação de sentimento
+
+```{r}
+positivas <- dfPolaridadesUnique %>% filter(sentimento == 'positivo') %>% select(word)
+negativas <- dfPolaridadesUnique %>% filter(sentimento == 'negativo') %>% select(word)
+```
+
+Preparando as categorias em um dicionário de referência
+
+```{r}
+# dictionary sentimental words
+dictionaryPortuguese <- SentimentDictionaryBinary(positivas$word, 
+                                                  negativas$word)
+```
+
+```{r}
+# ranking sentimental tweets
+tmls$id <- row.names(tmls)
+
+sentiment <- analyzeSentiment(tmls$text,language="portuguese",rules=list("PtSentiment"=list(ruleSentiment,dictionaryPortuguese),"Ratio"=list(ruleSentimentPolarity,dictionaryPortuguese),"Words"=list(ruleWordCount)))
+```
+
+# Captando os extremos do ranking
+
+```{r}
+sentiment$id <- row.names(sentiment)
+worstfeelings <- sentiment[order(sentiment$PtSentiment),][1:10,] 
+bestfeelings <-  sentiment[order(-sentiment$PtSentiment),][1:10,] 
+```
+
+## Topdown 10 Ruins
+```{r}
+tibble(tmls[tmls$id %in% worstfeelings$id,]$text)
+```
+
+##Topdown 10 Bons
+```{r}
+tibble(tmls[tmls$id %in% bestfeelings$id,]$text)
+```
+
+# PARTE 3
+# Detectando tendências
+
+# Noticias de ações tradersclub
+
+```{r}
+ibov1 <- GetIbovStocks()
+ibov1$tickers <- paste0(ibov1$tickers, ":")
+tickers1 <- paste0("$",ibov1$tickers)
+
+tmls1 <- data.frame(get_timelines(c("tradersclubbr"), n = 30))
+
+control <- c()
+cod <- c()
+aux <- c()
+for (i in 1:length(tmls1$text)) {
+  control <- unlist(strsplit(tmls1$text[i], " ", fixed = TRUE))
+  for (k in 1:length(control)) {
+    for (j in 1:length(tickers1)) {
+      if(control[k] == tickers1[j]){
+        aux[i] = i
+        cod[i] = tickers1[j]
+      }
+    }
+  }
+}
+
+minhaacao <- c()
+minhaacao <- na.exclude(tmls1$text[aux])
+```
+
+# Noticias de ações Filipe Villegas
+
+```{r}
+ibov2 <- GetIbovStocks()
+tickers2 <- paste0("#",ibov2$tickers)
+tmls2 <- data.frame(get_timelines(c("FilipeVillegas"), n = 8))
+
+control2 <- c()
+cod2 <- c()
+aux2 <- c()
+for (i in 1:length(tmls2$text)) {
+  control2 <- unlist(strsplit(tmls2$text[i], " ", fixed = TRUE))
+  for (k in 1:length(control2)) {
+    for (j in 1:length(tickers2)) {
+      if(control2[k] == tickers2[j]){
+        aux2[i] = i
+        cod2[i] = tickers2[j]
+      }
+    }
+  }
+}
+
+minhaacao2 <- c()
+minhaacao2 <- na.exclude(tmls2$text[aux2])
+```
+
+```{r}
+text <- c(minhaacao,minhaacao2)
+
+# criando ids
+id <- c(1:length(text))
+warms <-  data.frame(id,text)
+```
+
+# Passando pelo algoritmo de indicação de sentimentos
+
+```{r}
+# ranking sentimental tweets
+sentiment <- analyzeSentiment(as.character(warms$text),language="portuguese",rules=list("PtSentiment"=list(ruleSentiment,dictionaryPortuguese),"Ratio"=list(ruleSentimentPolarity,dictionaryPortuguese),"Words"=list(ruleWordCount)))
+```
+
+# Captando os extremos do ranking
+
+```{r}
+sentiment$id <- row.names(sentiment)
+worstfeelings <- sentiment[order(sentiment$PtSentiment),][1:3,] 
+bestfeelings <-  sentiment[order(-sentiment$PtSentiment),][1:3,] 
+```
+
+## Topdown 10 Ruins
+```{r}
+warms[warms$id %in% worstfeelings$id,]$text
+```
+
+##Topdown 10 Bons
+```{r}
+warms[warms$id %in% bestfeelings$id,]$text
+```
